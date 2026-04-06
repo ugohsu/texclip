@@ -143,7 +143,11 @@ def _typeset_to_svg(source, mode, engine, tmpdir):
     if not os.path.exists(pdf_path):
         return None, log or 'タイプセットに失敗しました（ログなし）。'
 
-    cairo_log = _run_cmd(['pdftocairo', '-svg', pdf_path, svg_path])
+    # -f 1 -l 1: 1ページ目のみ変換することで <pageSet> のない単ページ SVG を得る。
+    # standalone + uplatex は crop 機構で2ページ PDF を生成するが、
+    # 内容は常に1ページ目にある（2ページ目は空白）。
+    cairo_log = _run_cmd(['pdftocairo', '-svg', '-f', '1', '-l', '1',
+                          pdf_path, svg_path])
 
     # pdftocairo が複数ページ PDF を変換した場合は output-1.svg, output-2.svg, …
     # という連番ファイルが生成される（output.svg は作られない）。

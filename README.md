@@ -89,7 +89,7 @@ $
 **`--math` + `uplatex`**
 
 ```tex
-\documentclass[varwidth, crop, uplatex]{standalone}
+\documentclass[varwidth, crop, uplatex, dvipdfmx]{standalone}
 \usepackage{amsmath, amssymb, amsfonts}
 \begin{document}
 $\displaystyle
@@ -98,7 +98,30 @@ $
 \end{document}
 ```
 
-**`--body` モードも同様に** `\begin{document}` … `\end{document}` を補完する。`--full` は補完なしでそのままコンパイルする。
+**`--body` + `lualatex`**
+
+```tex
+\documentclass[varwidth, crop]{standalone}
+\usepackage{amsmath, amssymb, amsfonts, newtxtext, newtxmath}
+\usepackage{luatexja}
+\usepackage{tikz}
+\begin{document}
+（ファイルの内容）
+\end{document}
+```
+
+**`--body` + `uplatex`**
+
+```tex
+\documentclass[varwidth, crop, uplatex, dvipdfmx]{standalone}
+\usepackage{amsmath, amssymb, amsfonts}
+\usepackage{tikz}
+\begin{document}
+（ファイルの内容）
+\end{document}
+```
+
+`--full` は補完なしでそのままコンパイルする。
 
 ### 使用例
 
@@ -130,21 +153,22 @@ texclip --math --out ./out formula.tex
 texclip --math --no-copy --out ./out formula.tex
 ```
 
-**複数行数式・TikZ 図（`--full` モード）**
+**TikZ 図（`--body` モード）**
 
 ```tex
 % figure.tex
-\documentclass[varwidth, crop]{standalone}
-\usepackage{amsmath, amssymb, tikz}
-\usepackage{luatexja}
-\begin{document}
-\begin{tikzpicture}
+\begin{tikzpicture}[>=stealth]
   \draw[->] (0,0) -- (2,0) node[right] {$x$};
   \draw[->] (0,0) -- (0,2) node[above] {$y$};
   \draw[domain=0:1.8, smooth] plot (\x, {\x*\x});
 \end{tikzpicture}
-\end{document}
 ```
+
+```bash
+texclip --body figure.tex
+```
+
+**完全な `.tex` ファイル（`--full` モード）**
 
 ```bash
 texclip --full figure.tex
@@ -238,7 +262,7 @@ texclip web
 
 | エンジンセレクタ | 説明 |
 |----------------|------|
-| `lualatex` | 日本語・Unicode 対応、`newtxtext` / `newtxmath` フォント使用 |
+| `lualatex` | 日本語・Unicode 対応、`newtxtext` / `newtxmath` フォント使用。**推奨** |
 | `uplatex` | 旧来の pLaTeX 系。`ptex2pdf -u -l` で処理 |
 
 ### アクションバー
@@ -298,6 +322,25 @@ texclip web
   - 数式の構文ミス
   - `--full` モードで `\documentclass` が抜けている
 - エンジンを切り替えてみる（`lualatex` ↔ `uplatex`）。
+
+---
+
+## エンジン選択について
+
+**lualatex を推奨する。** 日本語・Unicode に対応しており、`newtxtext`/`newtxmath` フォントによる高品質な数式出力が得られる。内部で PDF を直接生成するため、crop も安定している。
+
+uplatex は旧来の pLaTeX 資産（独自スタイルファイル等）を使用する必要がある場合に選択する。
+
+### uplatex を使う場合の注意
+
+uplatex は DVI 経由で PDF を生成する（`ptex2pdf` → `dvipdfmx`）。`standalone` クラスの crop 機構が lualatex と異なるため、以下の挙動の違いがある：
+
+| | lualatex | uplatex |
+|---|---|---|
+| crop の手段 | `\pdfpagewidth` 等 PDF プリミティブで直接制御 | `preview.sty` のスニペット機構を使用 |
+| 生成される PDF | 常に 1 ページ | 2 ページ（1 ページ目：内容、2 ページ目：空白） |
+
+uplatex で生成される 2 ページ PDF はブラウザや Inkscape が対応していない多ページ SVG（`<pageSet>` 形式）になってしまうため、texclip は pdftocairo に `-f 1 -l 1` オプションを付けて 1 ページ目のみを単ページ SVG として変換している。
 
 ---
 
