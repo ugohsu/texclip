@@ -1,0 +1,457 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+"""texclip — LaTeX をタイプセットして SVG をクリップボードにコピーする
+
+使い方:
+    texclip --math  [-e uplatex] [--no-copy] [--out DIR] FILE
+    texclip --body  [-e uplatex] [--no-copy] [--out DIR] FILE
+    texclip --full  [-e uplatex] [--no-copy] [--out DIR] FILE
+    texclip web     [--port 8765]
+
+インストール:
+    texclip を $PATH の通ったディレクトリ (例: $HOME/bin) にコピーする
+"""
+
+import argparse
+import json
+import os
+import shutil
+import socket
+import subprocess
+import sys
+import tempfile
+import threading
+import webbrowser
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
+HTML_PATH = os.path.normpath(os.path.join(SCRIPT_DIR, '..', 'web', 'index.html'))
+
+
+# ── プリアンブルテンプレート ──────────────────────────────────────
+
+_MATH_LUA = """\
+\\documentclass[varwidth, crop]{{standalone}}
+\\usepackage{{amsmath, amssymb, amsfonts}}
+\\usepackage{{newtxtext, newtxmath}}
+\\usepackage{{luatexja}}
+\\begin{{document}}
+$\\displaystyle
+{body}
+$
+\\end{{document}}
+"""
+
+_MATH_UP = """\
+\\documentclass[varwidth, crop, uplatex]{{standalone}}
+\\usepackage{{amsmath, amssymb, amsfonts}}
+\\begin{{document}}
+$\\displaystyle
+{body}
+$
+\\end{{document}}
+"""
+
+_BODY_LUA = """\
+\\documentclass[varwidth, crop]{{standalone}}
+\\usepackage{{amsmath, amssymb, amsfonts, newtxtext, newtxmath}}
+\\usepackage{{luatexja}}
+\\begin{{document}}
+{body}
+\\end{{document}}
+"""
+
+_BODY_UP = """\
+\\documentclass[varwidth, crop, uplatex]{{standalone}}
+\\usepackage{{amsmath, amssymb, amsfonts}}
+\\begin{{document}}
+{body}
+\\end{{document}}
+"""
+
+
+# ── 共通ユーティリティ ────────────────────────────────────────────
+
+def build_tex(source, mode, engine):
+    """モードとエンジンに応じてプリアンブルを補完した完全な .tex を返す。"""
+    if mode == 'math':
+        tpl = _MATH_LUA if engine == 'lualatex' else _MATH_UP
+    elif mode == 'body':
+        tpl = _BODY_LUA if engine == 'lualatex' else _BODY_UP
+    else:  # full
+        return source
+    return tpl.format(body=source.strip())
+
+
+def _run_cmd(cmd, cwd=None, timeout=60):
+    """
+    コマンドを実行し、出力をターミナルに流しながら文字列として返す。
+    タイムアウト時は None を返す。
+    """
+    proc = subprocess.Popen(
+        cmd, cwd=cwd,
+        stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+        text=True, encoding='utf-8', errors='replace',
+    )
+    lines = []
+
+    def reader():
+        for line in proc.stdout:
+            print(line, end='', flush=True)
+            lines.append(line)
+
+    t = threading.Thread(target=reader, daemon=True)
+    t.start()
+    try:
+        proc.wait(timeout=timeout)
+    except subprocess.TimeoutExpired:
+        proc.kill()
+        proc.wait()
+        return None
+    t.join()
+    return ''.join(lines)
+
+
+def _typeset_to_svg(source, mode, engine, tmpdir):
+    """
+    tmpdir 内でタイプセットを実行する。
+    成功: (svg_string, log_string)
+    失敗: (None, log_string)
+    """
+    tex_path = os.path.join(tmpdir, 'input.tex')
+    pdf_path = os.path.join(tmpdir, 'input.pdf')
+    svg_path = os.path.join(tmpdir, 'output.svg')
+
+    with open(tex_path, 'w', encoding='utf-8') as f:
+        f.write(build_tex(source, mode, engine))
+
+    if engine == 'lualatex':
+        cmd = ['lualatex', '--interaction=nonstopmode', '--halt-on-error',
+               '--output-directory', tmpdir, tex_path]
+    else:  # uplatex (ptex2pdf)
+        cmd = ['ptex2pdf', '-u', '-l', 'input.tex']
+
+    log = _run_cmd(cmd, cwd=(tmpdir if engine != 'lualatex' else None))
+    if log is None:
+        return None, f'{engine} がタイムアウトしました (60秒)。'
+
+    if not os.path.exists(pdf_path):
+        return None, log or 'タイプセットに失敗しました（ログなし）。'
+
+    cairo_log = _run_cmd(['pdftocairo', '-svg', pdf_path, svg_path])
+
+    if not os.path.exists(svg_path):
+        msg = 'pdftocairo による SVG 変換に失敗しました。'
+        if cairo_log:
+            msg += '\n' + cairo_log
+        return None, msg
+
+    with open(svg_path, 'r', encoding='utf-8') as f:
+        svg = f.read()
+
+    return svg, log
+
+
+# ── clip サブコマンド ─────────────────────────────────────────────
+
+def cmd_clip(args):
+    mode = 'math' if args.math else ('body' if args.body else 'full')
+
+    try:
+        with open(args.file, 'r', encoding='utf-8') as f:
+            source = f.read()
+    except OSError as e:
+        print(f'エラー: {e}', file=sys.stderr)
+        sys.exit(1)
+
+    tmpdir = tempfile.mkdtemp(prefix='texclip_')
+    try:
+        svg, log = _typeset_to_svg(source, mode, args.engine, tmpdir)
+
+        if svg is None:
+            print('タイプセット失敗:\n' + log, file=sys.stderr)
+            sys.exit(1)
+
+        if args.out:
+            os.makedirs(args.out, exist_ok=True)
+            svg_out = os.path.join(args.out, 'output.svg')
+            pdf_out = os.path.join(args.out, 'output.pdf')
+            with open(svg_out, 'w', encoding='utf-8') as f:
+                f.write(svg)
+            shutil.copy(os.path.join(tmpdir, 'input.pdf'), pdf_out)
+            print(f'PDF を保存しました: {pdf_out}')
+            print(f'SVG を保存しました: {svg_out}')
+
+        if not args.no_copy:
+            if not shutil.which('xclip'):
+                print('xclip が見つかりません。--no-copy を指定するかインストールしてください。',
+                      file=sys.stderr)
+                sys.exit(1)
+            proc = subprocess.run(
+                ['xclip', '-selection', 'clipboard', '-t', 'image/svg+xml',
+                 '-i', os.path.join(tmpdir, 'output.svg')],
+            )
+            if proc.returncode != 0:
+                print('xclip が失敗しました。', file=sys.stderr)
+                sys.exit(1)
+            print('SVG をクリップボードにコピーしました。')
+
+    finally:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+
+
+# ── web サブコマンド ──────────────────────────────────────────────
+
+_web_cache = {}
+_web_cache_lock = threading.Lock()
+_session_dir = None
+
+
+def _run_typeset_web(source, mode, engine):
+    """
+    Web モード用タイプセット。
+    成功: (entry_id, svg_string, log_string)
+    失敗: (None, None, log_string)
+    """
+    tmpdir = tempfile.mkdtemp(dir=_session_dir, prefix='entry_')
+    entry_id = os.path.basename(tmpdir)
+
+    svg, log = _typeset_to_svg(source, mode, engine, tmpdir)
+
+    if svg is None:
+        shutil.rmtree(tmpdir, ignore_errors=True)
+        return None, None, log
+
+    with _web_cache_lock:
+        _web_cache[entry_id] = {
+            'tmpdir': tmpdir,
+            'svg': os.path.join(tmpdir, 'output.svg'),
+            'pdf': os.path.join(tmpdir, 'input.pdf'),
+        }
+
+    return entry_id, svg, log
+
+
+class Handler(BaseHTTPRequestHandler):
+
+    def do_GET(self):
+        if self.path in ('/', '/index.html'):
+            self._serve_file(HTML_PATH, 'text/html; charset=utf-8')
+        elif self.path.startswith('/download/'):
+            self._handle_download()
+        else:
+            self.send_error(404)
+
+    def do_POST(self):
+        if self.path == '/typeset':
+            self._handle_typeset()
+        elif self.path.startswith('/copy/'):
+            self._handle_copy()
+        else:
+            self.send_error(404)
+
+    def _handle_download(self):
+        parts = self.path.strip('/').split('/')
+        if len(parts) != 3 or parts[2] not in ('pdf', 'svg'):
+            self.send_error(400)
+            return
+        entry_id, fmt = parts[1], parts[2]
+        with _web_cache_lock:
+            entry = _web_cache.get(entry_id)
+        if entry is None:
+            self.send_error(404)
+            return
+        file_path = entry[fmt]
+        if not os.path.exists(file_path):
+            self.send_error(404)
+            return
+        content_type = 'application/pdf' if fmt == 'pdf' else 'image/svg+xml'
+        with open(file_path, 'rb') as f:
+            data = f.read()
+        self._send_bytes(data, content_type,
+                         extra_headers={'Content-Disposition':
+                                        f'attachment; filename="output.{fmt}"'})
+
+    def _handle_typeset(self):
+        body = self._read_body()
+        try:
+            req = json.loads(body)
+            source = req['source']
+            mode = req.get('mode', 'math')
+            engine = req.get('engine', 'lualatex')
+        except (json.JSONDecodeError, KeyError):
+            self.send_error(400)
+            return
+
+        if mode not in ('math', 'body', 'full'):
+            self.send_error(400)
+            return
+        if engine not in ('lualatex', 'uplatex'):
+            self.send_error(400)
+            return
+
+        entry_id, svg, log = _run_typeset_web(source, mode, engine)
+
+        if entry_id is not None:
+            self._send_json({'ok': True, 'id': entry_id, 'svg': svg, 'log': log})
+        else:
+            self._send_json({'ok': False, 'log': log})
+
+    def _handle_copy(self):
+        parts = self.path.strip('/').split('/')
+        if len(parts) != 3 or parts[2] not in ('svg', 'png'):
+            self.send_error(400)
+            return
+        entry_id, fmt = parts[1], parts[2]
+        with _web_cache_lock:
+            entry = _web_cache.get(entry_id)
+        if entry is None:
+            self.send_error(404)
+            return
+
+        if fmt == 'svg':
+            proc = subprocess.run(
+                ['xclip', '-selection', 'clipboard', '-t', 'image/svg+xml',
+                 '-i', entry['svg']],
+                capture_output=True,
+            )
+            ok = proc.returncode == 0
+            msg = '' if ok else proc.stderr.decode()
+        else:  # png
+            png_stem = os.path.join(entry['tmpdir'], 'copy_png')
+            subprocess.run(
+                ['pdftocairo', '-png', '-r', '300', entry['pdf'], png_stem],
+                capture_output=True,
+            )
+            png_path = png_stem + '-1.png'
+            if not os.path.exists(png_path):
+                self._send_json({'ok': False, 'msg': 'PNG 生成に失敗しました。'})
+                return
+            proc = subprocess.run(
+                ['xclip', '-selection', 'clipboard', '-t', 'image/png',
+                 '-i', png_path],
+                capture_output=True,
+            )
+            ok = proc.returncode == 0
+            msg = '' if ok else proc.stderr.decode()
+
+        self._send_json({'ok': ok, 'msg': msg})
+
+    def _read_body(self):
+        length = int(self.headers.get('Content-Length', 0))
+        return self.rfile.read(length)
+
+    def _serve_file(self, path, content_type):
+        try:
+            with open(path, 'rb') as f:
+                data = f.read()
+        except OSError:
+            self.send_error(404)
+            return
+        self._send_bytes(data, content_type)
+
+    def _send_bytes(self, data, content_type, extra_headers=None):
+        self.send_response(200)
+        self.send_header('Content-Type', content_type)
+        self.send_header('Content-Length', str(len(data)))
+        if extra_headers:
+            for k, v in extra_headers.items():
+                self.send_header(k, v)
+        self.end_headers()
+        self.wfile.write(data)
+
+    def _send_json(self, obj):
+        data = json.dumps(obj, ensure_ascii=False).encode('utf-8')
+        self._send_bytes(data, 'application/json; charset=utf-8')
+
+    def log_message(self, fmt, *args):
+        pass  # アクセスログを抑制
+
+
+def find_free_port(start):
+    for port in range(start, start + 20):
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            try:
+                s.bind(('127.0.0.1', port))
+                return port
+            except OSError:
+                continue
+    return start
+
+
+def cmd_web(args):
+    global _session_dir
+
+    if not os.path.exists(HTML_PATH):
+        print(f'エラー: {HTML_PATH} が見つかりません。', file=sys.stderr)
+        sys.exit(1)
+
+    port = find_free_port(args.port)
+    _session_dir = tempfile.mkdtemp(prefix='texclip_web_')
+
+    try:
+        server = ThreadingHTTPServer(('127.0.0.1', port), Handler)
+        url = f'http://localhost:{port}'
+        print(f'texclip web を起動しました → {url}')
+        print('停止するには Ctrl+C を押してください。')
+        threading.Timer(0.8, lambda: webbrowser.open(url)).start()
+        server.serve_forever()
+    except KeyboardInterrupt:
+        print('\n停止しました。')
+    finally:
+        shutil.rmtree(_session_dir, ignore_errors=True)
+
+
+# ── エントリポイント ──────────────────────────────────────────────
+
+def main():
+    # 第1引数が 'web' かどうかでサブコマンドを振り分ける
+    if len(sys.argv) >= 2 and sys.argv[1] == 'web':
+        sys.argv.pop(1)
+        parser = argparse.ArgumentParser(
+            prog='texclip web',
+            description='LaTeX タイプセット Web アプリをローカルで起動する',
+        )
+        parser.add_argument(
+            '--port', type=int, default=8765,
+            help='使用するポート番号 (デフォルト: 8765)',
+        )
+        cmd_web(parser.parse_args())
+    else:
+        parser = argparse.ArgumentParser(
+            prog='texclip',
+            description='LaTeX を SVG にタイプセットしてクリップボードにコピーする',
+            formatter_class=argparse.RawDescriptionHelpFormatter,
+        )
+        mode_group = parser.add_mutually_exclusive_group(required=True)
+        mode_group.add_argument(
+            '--math', '-m', action='store_true',
+            help='数式本文のみ ($\\displaystyle ... $ を自動補完)',
+        )
+        mode_group.add_argument(
+            '--body', '-b', action='store_true',
+            help='document 環境の本文のみ (\\begin{document} ... を自動補完)',
+        )
+        mode_group.add_argument(
+            '--full', '-f', action='store_true',
+            help='完全な .tex ファイル (プリアンブル補完なし)',
+        )
+        parser.add_argument(
+            '--engine', '-e', default='lualatex', choices=['lualatex', 'uplatex'],
+            metavar='ENGINE',
+            help='タイプセットエンジン: lualatex (デフォルト) または uplatex',
+        )
+        parser.add_argument(
+            '--no-copy', action='store_true',
+            help='クリップボードへのコピーを行わない',
+        )
+        parser.add_argument(
+            '--out', metavar='DIR',
+            help='出力ファイル (PDF・SVG) を保存するディレクトリ',
+        )
+        parser.add_argument('file', metavar='FILE', help='入力 .tex ファイル')
+        cmd_clip(parser.parse_args())
+
+
+if __name__ == '__main__':
+    main()
