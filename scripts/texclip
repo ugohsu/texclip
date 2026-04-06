@@ -21,11 +21,14 @@ import subprocess
 import sys
 import tempfile
 import threading
+import urllib.request
 import webbrowser
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-SCRIPT_DIR = os.path.dirname(os.path.realpath(__file__))
-HTML_PATH = os.path.normpath(os.path.join(SCRIPT_DIR, '..', 'web', 'index.html'))
+HTML_RAW_URL = ('https://raw.githubusercontent.com/ugohsu/texclip/master'
+                '/web/index.html')
+HTML_CACHE = os.path.join(os.path.expanduser('~'), '.cache', 'texclip',
+                          'index.html')
 
 
 # ── プリアンブルテンプレート ──────────────────────────────────────
@@ -205,6 +208,7 @@ def cmd_clip(args):
 _web_cache = {}
 _web_cache_lock = threading.Lock()
 _session_dir = None
+_html_content = None  # cmd_web が起動時にセットする
 
 
 def _run_typeset_web(source, mode, engine):
@@ -236,7 +240,8 @@ class Handler(BaseHTTPRequestHandler):
 
     def do_GET(self):
         if self.path in ('/', '/index.html'):
-            self._serve_file(HTML_PATH, 'text/html; charset=utf-8')
+            data = _html_content.encode('utf-8')
+            self._send_bytes(data, 'text/html; charset=utf-8')
         elif self.path.startswith('/download/'):
             self._handle_download()
         else:
@@ -341,15 +346,6 @@ class Handler(BaseHTTPRequestHandler):
         length = int(self.headers.get('Content-Length', 0))
         return self.rfile.read(length)
 
-    def _serve_file(self, path, content_type):
-        try:
-            with open(path, 'rb') as f:
-                data = f.read()
-        except OSError:
-            self.send_error(404)
-            return
-        self._send_bytes(data, content_type)
-
     def _send_bytes(self, data, content_type, extra_headers=None):
         self.send_response(200)
         self.send_header('Content-Type', content_type)
@@ -379,13 +375,41 @@ def find_free_port(start):
     return start
 
 
+def _get_html(force_update=False):
+    """
+    index.html を返す。
+    キャッシュ (~/.cache/texclip/index.html) があればそれを使い、
+    なければ GitHub から取得してキャッシュする。
+    force_update=True の場合は常にダウンロードする。
+    """
+    if not force_update and os.path.exists(HTML_CACHE):
+        with open(HTML_CACHE, 'r', encoding='utf-8') as f:
+            return f.read()
+
+    print(f'index.html を取得中 …', flush=True)
+    try:
+        with urllib.request.urlopen(HTML_RAW_URL, timeout=15) as resp:
+            html = resp.read().decode('utf-8')
+    except Exception as e:
+        if os.path.exists(HTML_CACHE):
+            print(f'警告: 取得失敗 ({e})。キャッシュを使用します。', file=sys.stderr)
+            with open(HTML_CACHE, 'r', encoding='utf-8') as f:
+                return f.read()
+        print(f'エラー: index.html の取得に失敗しました: {e}', file=sys.stderr)
+        sys.exit(1)
+
+    os.makedirs(os.path.dirname(HTML_CACHE), exist_ok=True)
+    with open(HTML_CACHE, 'w', encoding='utf-8') as f:
+        f.write(html)
+    print('キャッシュを更新しました。')
+    return html
+
+
 def cmd_web(args):
     global _session_dir
 
-    if not os.path.exists(HTML_PATH):
-        print(f'エラー: {HTML_PATH} が見つかりません。', file=sys.stderr)
-        sys.exit(1)
-
+    global _html_content
+    _html_content = _get_html(force_update=args.update)
     port = find_free_port(args.port)
     _session_dir = tempfile.mkdtemp(prefix='texclip_web_')
 
@@ -415,6 +439,10 @@ def main():
         parser.add_argument(
             '--port', type=int, default=8765,
             help='使用するポート番号 (デフォルト: 8765)',
+        )
+        parser.add_argument(
+            '--update', action='store_true',
+            help='GitHub から最新の index.html を取得してキャッシュを更新する',
         )
         cmd_web(parser.parse_args())
     else:
