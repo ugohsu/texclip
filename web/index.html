@@ -436,6 +436,9 @@
           <option value="uplatex">uplatex</option>
         </select>
         <div class="controls-spacer"></div>
+        <input type="file" id="file-input" accept=".tex,.txt" style="display:none">
+        <button class="btn-sm btn-sm-ghost" id="btn-open" disabled>Open…</button>
+        <button class="btn-sm btn-sm-ghost" id="btn-save" disabled>Save .tex</button>
         <button class="btn-sm btn-sm-accent" id="btn-typeset" disabled>Typeset ▶</button>
       </div>
     </div>
@@ -500,6 +503,9 @@ const elEngSelect  = document.getElementById('engine-select');
 const elBtnAdd     = document.getElementById('btn-add');
 const elBtnDelete  = document.getElementById('btn-delete');
 const elBtnTypeset = document.getElementById('btn-typeset');
+const elBtnOpen    = document.getElementById('btn-open');
+const elBtnSave    = document.getElementById('btn-save');
+const elFileInput  = document.getElementById('file-input');
 const elBtnCopySvg = document.getElementById('btn-copy-svg');
 const elBtnCopyPng = document.getElementById('btn-copy-png');
 const elBtnDlPdf   = document.getElementById('btn-dl-pdf');
@@ -592,6 +598,8 @@ function renderEditor() {
   elEngSelect.disabled  = !hasEntry;
   elBtnTypeset.disabled = !hasEntry;
   elBtnDelete.disabled  = !hasEntry;
+  elBtnOpen.disabled    = !hasEntry;
+  elBtnSave.disabled    = !hasEntry;
 
   if (!hasEntry) {
     elTexInput.value   = '';
@@ -740,6 +748,7 @@ async function typeset() {
 async function copySvg() {
   const e = state.entries[state.active];
   if (!e || !e.resultId) return;
+  setStatus('コピー中…', '');
   try {
     const res = await fetch(`/copy/${e.resultId}/svg`, {method: 'POST'});
     const data = await res.json();
@@ -757,6 +766,7 @@ async function copySvg() {
 async function copyPng() {
   const e = state.entries[state.active];
   if (!e || !e.resultId) return;
+  setStatus('コピー中…', '');
   try {
     const res = await fetch(`/copy/${e.resultId}/png`, {method: 'POST'});
     const data = await res.json();
@@ -769,6 +779,45 @@ async function copyPng() {
   } catch (err) {
     setStatus('通信エラー', 'err');
   }
+}
+
+// ── File open / save ───────────────────────────────────────────────
+
+function openFile() {
+  elFileInput.value = '';
+  elFileInput.click();
+}
+
+elFileInput.addEventListener('change', () => {
+  const file = elFileInput.files[0];
+  if (!file || state.active < 0) return;
+  const reader = new FileReader();
+  reader.onload = ev => {
+    const e = state.entries[state.active];
+    e.source = ev.target.result;
+    elTexInput.value = e.source;
+    if (!e.label) {
+      e.label = file.name.replace(/\.(tex|txt)$/i, '').slice(0, 24);
+      renderEntryList();
+    }
+    setStatus(file.name + ' を読み込みました', 'ok');
+  };
+  reader.readAsText(file);
+});
+
+function saveTeX() {
+  if (state.active < 0) return;
+  saveActiveEditorState();
+  const e = state.entries[state.active];
+  if (!e.source.trim()) { setStatus('内容が空です。', 'err'); return; }
+  const filename = (e.label || `entry_${e.num}`) + '.tex';
+  const blob = new Blob([e.source], {type: 'text/plain'});
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(blob);
+  a.download = filename;
+  a.click();
+  URL.revokeObjectURL(a.href);
+  setStatus(filename + ' を保存しました', 'ok');
 }
 
 function flash(btn) {
@@ -805,6 +854,8 @@ document.getElementById('btn-preview').onclick = function () {
 elBtnAdd.onclick    = addEntry;
 elBtnDelete.onclick = deleteActiveEntry;
 elBtnTypeset.onclick = typeset;
+elBtnOpen.onclick   = openFile;
+elBtnSave.onclick   = saveTeX;
 elBtnCopySvg.onclick = copySvg;
 elBtnCopyPng.onclick = copyPng;
 elBtnDlPdf.onclick  = () => download('pdf');
