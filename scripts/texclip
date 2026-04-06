@@ -59,6 +59,7 @@ _BODY_LUA = """\
 \\documentclass[varwidth, crop]{{standalone}}
 \\usepackage{{amsmath, amssymb, amsfonts, newtxtext, newtxmath}}
 \\usepackage{{luatexja}}
+\\usepackage{{tikz}}
 \\begin{{document}}
 {body}
 \\end{{document}}
@@ -67,6 +68,7 @@ _BODY_LUA = """\
 _BODY_UP = """\
 \\documentclass[varwidth, crop, uplatex]{{standalone}}
 \\usepackage{{amsmath, amssymb, amsfonts}}
+\\usepackage{{tikz}}
 \\begin{{document}}
 {body}
 \\end{{document}}
