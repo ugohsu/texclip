@@ -46,7 +46,7 @@ $
 """
 
 _MATH_UP = """\
-\\documentclass[varwidth, crop, uplatex]{{standalone}}
+\\documentclass[varwidth, crop, uplatex, dvipdfmx]{{standalone}}
 \\usepackage{{amsmath, amssymb, amsfonts}}
 \\begin{{document}}
 $\\displaystyle
@@ -66,7 +66,7 @@ _BODY_LUA = """\
 """
 
 _BODY_UP = """\
-\\documentclass[varwidth, crop, uplatex]{{standalone}}
+\\documentclass[varwidth, crop, uplatex, dvipdfmx]{{standalone}}
 \\usepackage{{amsmath, amssymb, amsfonts}}
 \\usepackage{{tikz}}
 \\begin{{document}}
