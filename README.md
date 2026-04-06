@@ -222,25 +222,23 @@ texclip web
 
 ### 画面構成
 
-```
-┌─────────────────────────────────────────────────────────┐
-│ TEX·VIEWER    [+ New] [Delete]          [Split] [Preview]│ ← ヘッダー
-├────────────────────┬────────────────────────────────────┤
-│ エントリリスト      │                                    │
-│ #1  \int_0^\in... │      SVG プレビュー                 │
-│ #2  E = mc^2   lua │                                    │
-│                    │                                    │
-├────────────────────┤────────────────────────────────────│
-│                    │▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓▓ リサイザー ▓▓▓▓▓▓│
-│  LaTeX 入力欄      ├────────────────────────────────────┤
-│                    │ LaTeX Log               [OK/ERROR] │
-│                    │ This is LuaTeX, Version ...        │
-│                    │ ...                                │
-├────────────────────┴────────────────────────────────────┤
-│ モード▼  エンジン▼          [Typeset ▶]                  │ ← コントロールバー
-├─────────────────────────────────────────────────────────┤
-│ [SVG コピー] [PNG コピー] [PDF ↓] [SVG ↓]    完了       │ ← アクションバー
-└─────────────────────────────────────────────────────────┘
+```mermaid
+block-beta
+  columns 2
+  header["TEX·VIEWER　　[+ New]　[Delete]　　　　　[Split]　[Preview]"]:2
+  block:leftPanel
+    columns 1
+    entryList["エントリリスト\n#1  \\int_0^\\infty ...\n#2  E = mc²  lua"]
+    editor["LaTeX 入力欄"]
+  end
+  block:rightPanel
+    columns 1
+    preview["SVG プレビュー"]
+    resizer["▓▓▓▓▓▓▓▓▓▓▓　リサイザー（ドラッグ）　▓▓▓▓▓▓▓▓▓▓▓"]
+    log["LaTeX Log　　　　　　　　　　　　[OK / ERROR]\nThis is LuaTeX, Version ..."]
+  end
+  control["モード▼　　エンジン▼　　　　　　　　　　[Typeset ▶]"]:2
+  action["[SVG コピー]　　[PNG コピー]　　[PDF ↓]　　[SVG ↓]　　　完了"]:2
 ```
 
 ### 操作手順
