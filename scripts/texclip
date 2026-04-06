@@ -145,11 +145,23 @@ def _typeset_to_svg(source, mode, engine, tmpdir):
 
     cairo_log = _run_cmd(['pdftocairo', '-svg', pdf_path, svg_path])
 
+    # pdftocairo が複数ページ PDF を変換した場合は output-1.svg, output-2.svg, …
+    # という連番ファイルが生成される（output.svg は作られない）。
+    # standalone + uplatex の crop 機構では測定用の空白ページが先頭に入ることがあるため、
+    # 連番ファイルが存在する場合は最後のページを採用する。
     if not os.path.exists(svg_path):
-        msg = 'pdftocairo による SVG 変換に失敗しました。'
-        if cairo_log:
-            msg += '\n' + cairo_log
-        return None, msg
+        numbered = sorted(
+            (f for f in os.listdir(tmpdir)
+             if f.startswith('output-') and f.endswith('.svg')),
+            key=lambda n: int(n[len('output-'):-len('.svg')])
+        )
+        if numbered:
+            svg_path = os.path.join(tmpdir, numbered[-1])
+        else:
+            msg = 'pdftocairo による SVG 変換に失敗しました。'
+            if cairo_log:
+                msg += '\n' + cairo_log
+            return None, msg
 
     with open(svg_path, 'r', encoding='utf-8') as f:
         svg = f.read()
@@ -192,9 +204,12 @@ def cmd_clip(args):
                 print('xclip が見つかりません。--no-copy を指定するかインストールしてください。',
                       file=sys.stderr)
                 sys.exit(1)
+            clip_svg = os.path.join(tmpdir, 'clip.svg')
+            with open(clip_svg, 'w', encoding='utf-8') as f:
+                f.write(svg)
             proc = subprocess.run(
                 ['xclip', '-selection', 'clipboard', '-t', 'image/svg+xml',
-                 '-i', os.path.join(tmpdir, 'output.svg')],
+                 '-i', clip_svg],
             )
             if proc.returncode != 0:
                 print('xclip が失敗しました。', file=sys.stderr)
@@ -228,10 +243,15 @@ def _run_typeset_web(source, mode, engine):
         shutil.rmtree(tmpdir, ignore_errors=True)
         return None, None, log
 
+    # SVG 文字列を固定ファイル名で保存（xclip・ダウンロード共用）
+    svg_out = os.path.join(tmpdir, 'result.svg')
+    with open(svg_out, 'w', encoding='utf-8') as f:
+        f.write(svg)
+
     with _web_cache_lock:
         _web_cache[entry_id] = {
             'tmpdir': tmpdir,
-            'svg': os.path.join(tmpdir, 'output.svg'),
+            'svg': svg_out,
             'pdf': os.path.join(tmpdir, 'input.pdf'),
         }
 
