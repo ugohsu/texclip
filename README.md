@@ -20,7 +20,7 @@ CLI モードとブラウザ GUI モードの 2 つのサブコマンドを 1 �
 | `lualatex` | タイプセット（lualatex モード） | TeX Live に同梱 |
 | `ptex2pdf` | タイプセット（uplatex モード） | TeX Live に同梱 |
 | `pdftocairo` | PDF → SVG / PNG 変換 | `sudo apt install poppler-utils` |
-| `xclip` | クリップボードへのコピー | `sudo apt install xclip` |
+| `xclip` / `wl-copy` | クリップボードへのコピー（X11 は xclip、Wayland は wl-copy を自動選択） | `sudo apt install xclip` / `sudo apt install wl-clipboard` |
 | Python 3.8 以上 | スクリプト実行 | 多くの環境に標準搭載 |
 
 ---

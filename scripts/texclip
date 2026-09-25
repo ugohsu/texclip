@@ -117,6 +117,31 @@ def _run_cmd(cmd, cwd=None, timeout=60):
     return ''.join(lines)
 
 
+def _clip_tool():
+    """Wayland なら wl-copy、そうでなければ xclip を返す。"""
+    return 'wl-copy' if os.environ.get('WAYLAND_DISPLAY') else 'xclip'
+
+
+def _copy_to_clipboard(path, mime):
+    """
+    ファイルを指定 MIME タイプでクリップボードにコピーする。
+    成功時は None、失敗時はエラーメッセージを返す。
+    """
+    tool = _clip_tool()
+    if not shutil.which(tool):
+        return f'{tool} が見つかりません。'
+    if tool == 'wl-copy':
+        cmd = ['wl-copy', '--type', mime]
+    else:
+        cmd = ['xclip', '-selection', 'clipboard', '-t', mime]
+    with open(path, 'rb') as f:
+        proc = subprocess.run(
+            cmd, stdin=f,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+    return None if proc.returncode == 0 else f'{tool} が失敗しました。'
+
+
 def _typeset_to_svg(source, mode, engine, tmpdir):
     """
     tmpdir 内でタイプセットを実行する。
@@ -204,19 +229,17 @@ def cmd_clip(args):
             print(f'SVG を保存しました: {svg_out}')
 
         if not args.no_copy:
-            if not shutil.which('xclip'):
-                print('xclip が見つかりません。--no-copy を指定するかインストールしてください。',
+            tool = _clip_tool()
+            if not shutil.which(tool):
+                print(f'{tool} が見つかりません。--no-copy を指定するかインストールしてください。',
                       file=sys.stderr)
                 sys.exit(1)
             clip_svg = os.path.join(tmpdir, 'clip.svg')
             with open(clip_svg, 'w', encoding='utf-8') as f:
                 f.write(svg)
-            proc = subprocess.run(
-                ['xclip', '-selection', 'clipboard', '-t', 'image/svg+xml',
-                 '-i', clip_svg],
-            )
-            if proc.returncode != 0:
-                print('xclip が失敗しました。', file=sys.stderr)
+            err = _copy_to_clipboard(clip_svg, 'image/svg+xml')
+            if err:
+                print(err, file=sys.stderr)
                 sys.exit(1)
             print('SVG をクリップボードにコピーしました。')
 
@@ -341,13 +364,7 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if fmt == 'svg':
-            proc = subprocess.run(
-                ['xclip', '-selection', 'clipboard', '-t', 'image/svg+xml',
-                 '-i', entry['svg']],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            ok = proc.returncode == 0
-            msg = '' if ok else 'xclip が失敗しました。'
+            err = _copy_to_clipboard(entry['svg'], 'image/svg+xml')
         else:  # png
             png_stem = os.path.join(entry['tmpdir'], 'copy_png')
             subprocess.run(
@@ -358,15 +375,9 @@ class Handler(BaseHTTPRequestHandler):
             if not os.path.exists(png_path):
                 self._send_json({'ok': False, 'msg': 'PNG 生成に失敗しました。'})
                 return
-            proc = subprocess.run(
-                ['xclip', '-selection', 'clipboard', '-t', 'image/png',
-                 '-i', png_path],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
-            )
-            ok = proc.returncode == 0
-            msg = '' if ok else 'xclip が失敗しました。'
+            err = _copy_to_clipboard(png_path, 'image/png')
 
-        self._send_json({'ok': ok, 'msg': msg})
+        self._send_json({'ok': err is None, 'msg': err or ''})
 
     def _read_body(self):
         length = int(self.headers.get('Content-Length', 0))
